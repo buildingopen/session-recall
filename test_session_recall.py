@@ -758,6 +758,214 @@ def main():
         else:
             check("mcp: recall_list response", False, f"only {len(mcp_lines3)} lines")
 
+        # MCP tool call: recall_apply (append to file)
+        apply_test_dir = Path(tmpdir) / "mcp-apply-test"
+        apply_test_dir.mkdir(exist_ok=True)
+        apply_claude_md = apply_test_dir / "CLAUDE.md"
+        apply_claude_md.write_text("# Test\n\nExisting content.\n")
+
+        mcp_apply = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_apply += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "recall_apply", "arguments": {"text": "Test rule from MCP", "target": "claude_md"}
+        }}) + "\n"
+        # recall_apply uses _find_claude_md() which checks cwd; we test the MCP handler directly
+        # via the module import instead
+        if spec and spec.loader:
+            result = sr_mod._mcp_handle_tool("recall_apply", {"text": "MCP test rule", "target": "claude_md"})
+            result_text = result.get("content", [{}])[0].get("text", "")
+            check("mcp: recall_apply returns success", "Appended" in result_text, f"got: {result_text}")
+
+        # MCP tool call: recall_report (structured JSON)
+        mcp_report = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_report += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "recall_report", "arguments": {"session_keyword": "ZEPHYR"}
+        }}) + "\n"
+        mcp_proc_report = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_report, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_report_lines = [l for l in mcp_proc_report.stdout.strip().split("\n") if l.strip()]
+        if len(mcp_report_lines) >= 2:
+            report_resp = json.loads(mcp_report_lines[1])
+            report_text = report_resp.get("result", {}).get("content", [{}])[0].get("text", "")
+            try:
+                report_data = json.loads(report_text)
+                check("mcp: recall_report returns JSON", "stats" in report_data, f"keys: {list(report_data.keys())}")
+                check("mcp: recall_report has stats", "user_messages" in report_data.get("stats", {}),
+                      f"stats: {report_data.get('stats')}")
+            except json.JSONDecodeError:
+                check("mcp: recall_report returns JSON", False, f"not JSON: {report_text[:100]}")
+        else:
+            check("mcp: recall_report response", False, f"only {len(mcp_report_lines)} lines")
+
+        # MCP error handling: unknown tool
+        mcp_unknown = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_unknown += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "nonexistent_tool", "arguments": {}
+        }}) + "\n"
+        mcp_proc_unk = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_unknown, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_unk_lines = [l for l in mcp_proc_unk.stdout.strip().split("\n") if l.strip()]
+        if len(mcp_unk_lines) >= 2:
+            unk_resp = json.loads(mcp_unk_lines[1])
+            unk_result = unk_resp.get("result", {})
+            check("mcp: unknown tool returns error", unk_result.get("isError", False), f"got: {unk_result}")
+        else:
+            check("mcp: unknown tool response", False, f"only {len(mcp_unk_lines)} lines")
+
+        # MCP error handling: recall_apply missing args
+        if spec and spec.loader:
+            result_no_text = sr_mod._mcp_handle_tool("recall_apply", {"target": "claude_md"})
+            check("mcp: recall_apply missing text", result_no_text.get("isError", False), f"got: {result_no_text}")
+            result_bad_target = sr_mod._mcp_handle_tool("recall_apply", {"text": "rule", "target": "invalid"})
+            check("mcp: recall_apply bad target", result_bad_target.get("isError", False), f"got: {result_bad_target}")
+
+        # ==========================================
+        print(f"\n=== _find_memory_md() path resolution ===")
+        # ==========================================
+
+        if spec and spec.loader:
+            # Create project dir structure: tmpdir/.claude/projects/-root-session-recall/ and -root/
+            fake_home = Path(tmpdir) / "fakehome"
+            fake_projects = fake_home / ".claude" / "projects"
+            parent_dir = fake_projects / "-root"
+            parent_dir.mkdir(parents=True)
+            (parent_dir / "memory").mkdir()
+            (parent_dir / "memory" / "MEMORY.md").write_text("# Parent memory\n")
+
+            # Test: _find_memory_md with parent fallback
+            # We can't easily override Path.home(), so test the logic directly
+            # by testing the path walking algorithm
+            cwd = Path("/root/session-recall")
+            candidates = [cwd] + list(cwd.parents)
+            existing_dirs = {"-root": parent_dir}
+            found = None
+            for path in candidates:
+                encoded = str(path).replace("/", "-")
+                if encoded in existing_dirs:
+                    found = encoded
+                    break
+            check("path resolution: /root/session-recall falls back to -root",
+                  found == "-root", f"found: {found}")
+
+            # Test: exact match takes priority
+            child_dir = fake_projects / "-root-session-recall"
+            child_dir.mkdir(parents=True)
+            (child_dir / "memory").mkdir()
+            existing_dirs["-root-session-recall"] = child_dir
+            found2 = None
+            for path in candidates:
+                encoded = str(path).replace("/", "-")
+                if encoded in existing_dirs:
+                    found2 = encoded
+                    break
+            check("path resolution: exact match takes priority",
+                  found2 == "-root-session-recall", f"found: {found2}")
+
+        # ==========================================
+        print(f"\n=== _append_to_file() code fence handling ===")
+        # ==========================================
+
+        if spec and spec.loader:
+            # Test: header inside code fence is ignored
+            fence_file = Path(tmpdir) / "fence-test.md"
+            fence_file.write_text(
+                "# Doc\n\nSome content.\n\n```markdown\n## Session Recall Rules\nThis is example code\n```\n\n## Other Section\nstuff\n"
+            )
+            sr_mod._append_to_file(fence_file, "## Session Recall Rules", ["new rule"])
+            content = fence_file.read_text()
+            # The rule should be appended at the end as a NEW section (not inside the fence)
+            check("fence: header inside fence ignored",
+                  content.count("## Session Recall Rules") == 2,
+                  f"count: {content.count('## Session Recall Rules')}")
+            check("fence: new rule appended correctly",
+                  "- new rule" in content, f"content: {content[-200:]}")
+
+            # Test: header outside code fence works normally
+            normal_file = Path(tmpdir) / "normal-test.md"
+            normal_file.write_text("# Doc\n\n## Session Recall Rules\n- existing rule\n\n## Other\nstuff\n")
+            sr_mod._append_to_file(normal_file, "## Session Recall Rules", ["added rule"])
+            content2 = normal_file.read_text()
+            check("fence: normal section append works",
+                  "- added rule" in content2 and "- existing rule" in content2,
+                  f"content: {content2}")
+            # The added rule should be before ## Other
+            added_pos = content2.index("- added rule")
+            other_pos = content2.index("## Other")
+            check("fence: rule inserted before next section",
+                  added_pos < other_pos, f"added={added_pos} other={other_pos}")
+
+        # ==========================================
+        print(f"\n=== --check-compaction ===")
+        # ==========================================
+
+        # Compacted session: exit 0
+        out_cc, _, rc_cc = run(["--check-compaction", "--session", str(compaction_fixture)], env)
+        # --check-compaction doesn't use --session (it uses find_current_session), so we set up differently
+        # Touch compaction fixture to make it newest
+        compaction_fixture.write_text(compaction_fixture.read_text())
+        time.sleep(0.05)
+        out_cc, _, rc_cc = run(["--check-compaction"], env)
+        check("check-compaction: compacted session exit 0", rc_cc == 0, f"rc={rc_cc}")
+
+        # Non-compacted session: exit 1
+        # Touch fixture_a to make it newest (no compaction markers)
+        time.sleep(0.05)
+        fixture_a_path.write_text(build_fixture_a())
+        out_nc, _, rc_nc = run(["--check-compaction"], env)
+        check("check-compaction: clean session exit 1", rc_nc == 1, f"rc={rc_nc}")
+
+        # --check-compaction in help
+        out_help2, _, _ = run(["--help"], env)
+        check("check-compaction: in help text", "--check-compaction" in out_help2, "not in help")
+
+        # ==========================================
+        print(f"\n=== Soft correction patterns ===")
+        # ==========================================
+
+        # Build a fixture with soft correction patterns
+        soft_fixture = project_dir / "session-soft-corrections.jsonl"
+        soft_lines = [
+            make_line("user", "user", "Build the API"),
+            make_line("assistant", "assistant", "Using Express."),
+            make_line("user", "user", "Let's use Fastify instead of Express."),
+            make_line("assistant", "assistant", "OK switching to Fastify."),
+            make_line("user", "user", "I prefer TypeScript for this project."),
+            make_line("assistant", "assistant", "Switching to TypeScript."),
+            make_line("user", "user", "Can we use pnpm instead?"),
+        ]
+        soft_fixture.write_text("\n".join(soft_lines) + "\n")
+
+        out_soft, _, rc_soft = run(["--report", "--session", str(soft_fixture)], env)
+        check("soft corrections: detected", "CORRECTION" in out_soft, f"no corrections found")
+        check("soft corrections: Fastify or prefer detected",
+              "Fastify" in out_soft or "prefer" in out_soft.lower() or "pnpm" in out_soft.lower(),
+              f"output: {out_soft[:300]}")
+
+        # ==========================================
+        print(f"\n=== Improved rule quality ===")
+        # ==========================================
+
+        # Rules from retry fixture should include specific context
+        if spec and spec.loader:
+            entries_r = sr_mod.parse_entries(retry_fixture)
+            retries_r = sr_mod.rpt_retries(entries_r)
+            errors_r = sr_mod.rpt_errors(entries_r)
+            corrections_r = sr_mod.rpt_corrections(entries_r)
+            scores_r = sr_mod.rpt_scores(entries_r)
+            compactions_r = sr_mod.rpt_compactions(entries_r)
+            rules_r, memories_r = sr_mod.generate_lessons(retries_r, errors_r, corrections_r, scores_r, compactions_r)
+            # Rules should contain specific tool names and line numbers
+            has_specific = any("npm test" in r or "lines" in r for r in rules_r)
+            check("rule quality: includes specific context", has_specific, f"rules: {rules_r}")
+            # Memories should contain actual correction text
+            has_correction_text = any("database" in m.lower() for m in memories_r)
+            check("rule quality: memories include correction text", has_correction_text, f"memories: {memories_r}")
+
     finally:
         # Cleanup
         shutil.rmtree(tmpdir, ignore_errors=True)

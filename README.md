@@ -90,6 +90,7 @@ session-recall --report               # Errors, retries, corrections, rules
 session-recall --report --deep        # + Gemini project-specific insights
 session-recall --all                  # Cross-session patterns (last 10)
 session-recall --all 20 --deep        # Cross-session + Gemini
+session-recall --check-compaction     # Exit 0 if session was compacted, 1 otherwise
 
 # Apply rules (interactive review, then append to CLAUDE.md / MEMORY.md)
 session-recall --apply                # Template-based rules
@@ -150,6 +151,31 @@ Claude Code gets 6 tools:
 | `recall_list` | List available sessions |
 
 After compaction, Claude can call `recall_search` to recover lost context, then `recall_report` to suggest rules, and `recall_apply` (with your approval) to persist the lessons.
+
+## Auto-trigger after compaction
+
+Add a PreToolUse hook to `~/.claude/settings.json` so Claude is notified when context was compacted:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "session-recall --check-compaction && echo '{\"decision\": \"approve\"}' || echo '{\"decision\": \"approve\"}'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`--check-compaction` exits 0 if the current session contains a compaction marker, 1 otherwise. The hook fires once per session and reminds Claude that `recall_search` and `recall_report` MCP tools are available for context recovery.
 
 ## Setup
 

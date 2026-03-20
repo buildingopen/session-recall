@@ -350,6 +350,12 @@ CORRECTION_PATTERNS = [
     re.compile(r"\bdon'?t (?:do|use|add|change|remove|delete|create)\b", re.I),
     re.compile(r"\bstop (?:doing|adding|changing|deleting|creating)\b", re.I),
     re.compile(r"\bwrong (?:file|path|approach|way|method|port|url|name)\b", re.I),
+    # Soft correction patterns: user steering, not just pushback
+    re.compile(r"\blet'?s (?:use|try|go with|switch to)\b", re.I),
+    re.compile(r"\bi(?:'d)? prefer\b", re.I),
+    re.compile(r"\bcan we (?:do|use|try|go with)\b", re.I),
+    re.compile(r"\bactually,? let'?s\b", re.I),
+    re.compile(r"\bi'?d rather\b", re.I),
 ]
 
 SCORE_PATTERN = re.compile(r'\b(\d{1,2})\s*/\s*10\b')
@@ -586,49 +592,67 @@ def rpt_compactions(entries):
 
 
 def generate_lessons(retries, errors, corrections, scores, compactions):
-    """Generate actionable CLAUDE.md rules and MEMORY.md entries from analysis (template-based)."""
+    """Generate actionable CLAUDE.md rules and MEMORY.md entries from analysis.
+
+    Rules include specific context from the session (tool names, error text,
+    line numbers) rather than generic advice.
+    """
     rules = []  # CLAUDE.md-style rules
     memories = []  # MEMORY.md-style facts
 
-    # From retries
+    # From retries: include the actual command/input that was retried
     retry_tools = set()
     for r in retries:
         tool = r["tool"]
         if tool not in retry_tools:
             retry_tools.add(tool)
-            rules.append(f"After 2 failures with {tool}, switch approach. Do not retry the same {tool} call a third time.")
+            preview = r.get("input_preview", "")[:80]
+            line_info = f"lines {r['first_line']}-{r['last_line']}"
+            rules.append(
+                f"{tool} command retried {r['count']}x ({line_info}): `{preview}`. "
+                f"After 2 failures with {tool}, switch approach instead of retrying."
+            )
 
-    # From errors
+    # From errors: include specific error examples
     cats = errors.get("by_category", {})
+    error_details = errors.get("details", [])
     if cats.get("FILE_NOT_FOUND", 0) >= 2:
-        rules.append("Use Glob to verify file paths exist before reading. FILE_NOT_FOUND errors are preventable.")
+        examples = [e["text"][:80] for e in error_details if e["category"] == "FILE_NOT_FOUND"][:2]
+        rules.append("Use Glob to verify file paths before reading. FILE_NOT_FOUND errors ({} total): {}".format(
+            cats["FILE_NOT_FOUND"], "; ".join(examples) if examples else "multiple paths missing"))
     if cats.get("EDIT_FAILED", 0) >= 2:
-        rules.append("Re-read files immediately before editing. Use more surrounding context in old_string for uniqueness.")
+        rules.append("Re-read files immediately before editing. {} EDIT_FAILED errors in this session.".format(cats["EDIT_FAILED"]))
     if cats.get("HOOK_BLOCKED", 0) >= 1:
-        rules.append("Hook blocks are deterministic. Never retry the same blocked command. Use a different tool or approach.")
+        examples = [e["text"][:80] for e in error_details if e["category"] == "HOOK_BLOCKED"][:1]
+        rules.append("Hook blocks are deterministic. Blocked: {}. Never retry, use a different approach.".format(
+            examples[0] if examples else "command blocked by hook"))
     if cats.get("FILE_TOO_LARGE", 0) >= 1:
-        rules.append("Use offset/limit or Grep for large files. Never retry Read without parameters on a large file.")
+        rules.append("Use offset/limit or Grep for large files. {} FILE_TOO_LARGE errors.".format(cats["FILE_TOO_LARGE"]))
     if cats.get("TIMEOUT", 0) >= 1:
-        rules.append("Use timeout for long-running commands. Investigate root cause instead of retrying.")
+        rules.append("{} TIMEOUT errors. Use timeout for long-running commands, investigate root cause.".format(cats["TIMEOUT"]))
 
-    # From corrections
+    # From corrections: include the actual correction text
     if len(corrections) >= 3:
-        rules.append("Multiple user corrections detected. Read instructions more carefully before acting. Verify assumptions.")
+        correction_summaries = [c["text"][:60] for c in corrections[:3]]
+        rules.append("Multiple user corrections ({}): {}. Read instructions more carefully before acting.".format(
+            len(corrections), "; ".join(correction_summaries)))
     if len(corrections) >= 1:
         for c in corrections[:3]:
             text = c["text"][:150]
             memories.append(f"User correction (line {c['line']}): {text}")
 
-    # From scores
+    # From scores: include the actual score context
     inflated = [s for s in scores if s["correction_after"]]
     if inflated:
-        rules.append("List flaws BEFORE scoring. User found issues after self-scores of "
-                      + ", ".join(f"{s['score']}/10" for s in inflated[:3])
-                      + ". Adversarial review before claiming done.")
+        score_details = ", ".join(
+            f"{s['score']}/10 at line {s['line']}" for s in inflated[:3]
+        )
+        rules.append(f"List flaws BEFORE scoring. User found issues after self-scores of {score_details}. Adversarial review before claiming done.")
 
     # From compactions
     if len(compactions) >= 2:
-        rules.append("Session had multiple compactions. Use workplan files as external brain. Re-read the plan after each compaction.")
+        rules.append("Session had {} compactions. Use workplan files as external brain. Re-read the plan after each compaction.".format(
+            len(compactions)))
 
     return rules, memories
 
@@ -824,14 +848,19 @@ def _find_memory_md():
     projects_dir = Path.home() / ".claude" / "projects"
     if not projects_dir.is_dir():
         return None
-    # Find the project dir for cwd by checking encoded path
-    cwd = str(Path.cwd())
-    cwd_encoded = cwd.replace("/", "-")
-    for d in projects_dir.iterdir():
-        if d.is_dir() and d.name == cwd_encoded:
-            mem_dir = d / "memory"
+    # Walk up cwd path trying each parent: /root/session-recall -> try -root-session-recall, then -root
+    cwd = Path.cwd()
+    candidates = [cwd] + list(cwd.parents)
+    existing_dirs = {d.name: d for d in projects_dir.iterdir() if d.is_dir()}
+    for path in candidates:
+        encoded = str(path).replace("/", "-")
+        if encoded in existing_dirs:
+            mem_dir = existing_dirs[encoded] / "memory"
             mem_dir.mkdir(exist_ok=True)
             return mem_dir / "MEMORY.md"
+        # Stop at root
+        if path == Path("/"):
+            break
     # Fallback: most recently modified project dir
     project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
     for d in project_dirs:
@@ -888,30 +917,44 @@ def _hitl_review(items, item_type):
 
 
 def _append_to_file(filepath, section_header, items):
-    """Append items under a section header in a file."""
+    """Append items under a section header in a file.
+
+    Tracks code fence state (``` toggles) so that section headers
+    appearing inside fenced code blocks are not matched.
+    """
     filepath = Path(filepath)
     existing = filepath.read_text() if filepath.exists() else ""
 
-    # Check if section already exists
-    if section_header in existing:
-        # Append to existing section (before next ## or end of file)
-        lines = existing.split("\n")
+    # Check if section already exists (outside code fences)
+    lines = existing.split("\n")
+    in_fence = False
+    section_line = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if not in_fence and stripped == section_header:
+            section_line = i
+            break
+
+    if section_line is not None:
+        # Append to existing section (before next ## outside fences or end of file)
         insert_idx = None
-        for i, line in enumerate(lines):
-            if line.strip() == section_header:
-                # Find the end of this section (next ## or EOF)
-                for j in range(i + 1, len(lines)):
-                    if lines[j].startswith("## ") and lines[j].strip() != section_header:
-                        insert_idx = j
-                        break
-                if insert_idx is None:
-                    insert_idx = len(lines)
+        fence_state = False
+        for j in range(section_line + 1, len(lines)):
+            stripped = lines[j].strip()
+            if stripped.startswith("```"):
+                fence_state = not fence_state
+                continue
+            if not fence_state and lines[j].startswith("## ") and stripped != section_header:
+                insert_idx = j
                 break
-        if insert_idx is not None:
-            new_lines = [f"- {item}" for item in items]
-            lines = lines[:insert_idx] + new_lines + lines[insert_idx:]
-            filepath.write_text("\n".join(lines))
-            return
+        if insert_idx is None:
+            insert_idx = len(lines)
+        new_lines = [f"- {item}" for item in items]
+        lines = lines[:insert_idx] + new_lines + lines[insert_idx:]
+        filepath.write_text("\n".join(lines))
     else:
         # Add new section at end
         separator = "\n" if existing and not existing.endswith("\n") else ""
@@ -1691,7 +1734,7 @@ def mcp_serve():
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.1.0"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.0"},
             }
         elif method == "notifications/initialized":
             continue
@@ -1731,6 +1774,7 @@ def main():
     parser.add_argument("--apply", action="store_true", help="Review and append rules to CLAUDE.md / MEMORY.md (interactive)")
     parser.add_argument("--all", type=int, nargs="?", const=10, metavar="N", help="Cross-session analysis (last N sessions, default 10). Use with --report")
     parser.add_argument("--mcp", action="store_true", help="Run as MCP server (stdin/stdout JSON-RPC)")
+    parser.add_argument("--check-compaction", action="store_true", help="Exit 0 if current session was compacted, exit 1 otherwise")
     parser.add_argument("--pin", action="store_true", help="Pin the resolved session for subsequent calls")
     parser.add_argument("--pin-by", type=str, metavar="KEYWORD", help="Find and pin the session containing KEYWORD")
     parser.add_argument("--unpin", action="store_true", help="Remove session pin")
@@ -1742,6 +1786,20 @@ def main():
         return mcp_serve()
 
     project_dirs = find_project_dirs()
+
+    # --check-compaction mode: fast check for hook usage
+    if args.check_compaction:
+        session_path = find_current_session(project_dirs)
+        if not session_path:
+            return 1
+        try:
+            with open(session_path, "r", errors="replace") as f:
+                for raw_line in f:
+                    if "continued from a previous conversation" in raw_line.lower():
+                        return 0
+        except OSError:
+            pass
+        return 1
 
     # --unpin mode
     if args.unpin:
