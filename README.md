@@ -1,5 +1,9 @@
 # session-recall
 
+[![npm version](https://img.shields.io/npm/v/session-recall)](https://www.npmjs.com/package/session-recall)
+[![license](https://img.shields.io/npm/l/session-recall)](https://github.com/buildingopen/session-recall/blob/main/LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/session-recall)](https://www.npmjs.com/package/session-recall)
+
 Claude Code forgets everything after context compaction. This gets it back.
 
 ```bash

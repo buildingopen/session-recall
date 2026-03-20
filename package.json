@@ -23,6 +23,10 @@
     "type": "git",
     "url": "https://github.com/buildingopen/session-recall.git"
   },
+  "homepage": "https://github.com/buildingopen/session-recall#readme",
+  "bugs": {
+    "url": "https://github.com/buildingopen/session-recall/issues"
+  },
   "engines": {
     "node": ">=16.0.0"
   }
