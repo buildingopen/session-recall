@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="620" viewBox="0 0 820 620">
+  <style>
+    .terminal { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Monaco, 'Courier New', monospace; font-size: 13px; }
+    .prompt { fill: #50fa7b; }
+    .output { fill: #f8f8f2; }
+    .dim { fill: #6272a4; }
+    .accent { fill: #ff79c6; }
+    .warn { fill: #ffb86c; }
+    .info { fill: #8be9fd; }
+    .heading { fill: #f1fa8c; font-weight: bold; }
+    .green { fill: #50fa7b; }
+    .red { fill: #ff5555; }
+  </style>
+  <rect width="820" height="620" rx="10" fill="#282a36"/>
+  <!-- Title bar -->
+  <rect width="820" height="36" rx="10" fill="#44475a"/>
+  <rect y="26" width="820" height="10" fill="#44475a"/>
+  <circle cx="20" cy="18" r="6" fill="#ff5555"/>
+  <circle cx="40" cy="18" r="6" fill="#f1fa8c"/>
+  <circle cx="60" cy="18" r="6" fill="#50fa7b"/>
+  <text x="410" y="22" text-anchor="middle" class="terminal dim" font-size="12">session-recall --report</text>
+
+  <g class="terminal" transform="translate(16, 56)">
+    <text y="0" class="prompt">$ session-recall --report</text>
+
+    <text y="28" class="dim">Session: 953afe03-f9fd-4ef1-8235-eb84b34093c5</text>
+    <text y="44" class="dim">Size: 7564KB</text>
+    <text y="60" class="dim">---</text>
+    <text y="78" class="output">Messages: 62 user, 485 assistant | Tools: 1256 | Errors: 62 | Compactions: 4</text>
+
+    <text y="110" class="heading">TOP ISSUES</text>
+    <text y="128" class="warn">  1. [RETRY] Bash x5 (lines 2041-2180): ffmpeg render failing on audio sync</text>
+    <text y="146" class="warn">  2. [RETRY] Edit x3 (lines 890-920): old_string not unique in component</text>
+    <text y="164" class="red">  3. [INFLATED SCORE] 10/10 at line 3200, user found issues after</text>
+    <text y="182" class="accent">  4. [CORRECTION] line 1580: "No, the narration must sync with transitions"</text>
+
+    <text y="214" class="heading">TOOL EFFICIENCY</text>
+    <text y="232" class="dim">  Tool                  Calls  Errors  Success%</text>
+    <text y="250" class="output">  Bash                    580      38       93%</text>
+    <text y="268" class="output">  Read                    310       2       99%</text>
+    <text y="286" class="output">  Edit                    198      12       94%</text>
+    <text y="304" class="output">  Write                    42       0      100%</text>
+    <text y="322" class="output">  Grep                     88       0      100%</text>
+
+    <text y="354" class="heading">ERRORS (62)</text>
+    <text y="372" class="output">  COMMAND_FAILED: 31</text>
+    <text y="390" class="output">  FILE_NOT_FOUND: 14</text>
+    <text y="408" class="output">  TIMEOUT: 9</text>
+    <text y="426" class="output">  EDIT_FAILED: 8</text>
+
+    <text y="458" class="heading">SUGGESTED CLAUDE.MD RULES</text>
+    <text y="476" class="green">  - After 2 failures with Bash, switch approach. Do not retry a third time.</text>
+    <text y="494" class="green">  - Re-read files immediately before editing. Use more context for uniqueness.</text>
+    <text y="512" class="green">  - List flaws BEFORE scoring. User found issues after self-scores of 10/10.</text>
+    <text y="530" class="green">  - Use workplan files as external brain. Re-read after each compaction.</text>
+
+    <text y="562" class="dim">Run with --deep for Gemini-powered project-specific insights.</text>
+  </g>
+</svg>

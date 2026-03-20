@@ -12,56 +12,31 @@ When Claude Code compacts context, you get a vague summary. Details vanish: deci
 
 session-recall parses those JSONL transcripts properly. It extracts human-readable messages, tool calls, errors, and patterns, so you find what you need in seconds.
 
-## What you get
+## Search any past session
 
-**Search** any past session by keyword:
+Find exactly what was lost after compaction:
 
-```
-$ session-recall "deploy" "vercel"
+<p align="center">
+  <img src="assets/demo-search.svg" alt="session-recall search demo" width="780">
+</p>
 
-Session: 953afe03-f9fd-4ef1-8235-eb84b34093c5
-Size: 7564KB
----
-Found 12 matches (showing last 5):
+## Analyze your sessions
 
-[assistant] (line 4820)
-...deployed to Vercel with --token flag. Production URL: https://app.example.com
-Build time: 34s, no errors. The CORS issue was caused by missing...
----
-```
+`--report` finds retry loops, errors, user corrections, inflated self-scores, and generates CLAUDE.md rules to prevent the same mistakes:
 
-**Analyze** your sessions for patterns with `--report`:
+<p align="center">
+  <img src="assets/demo-report.svg" alt="session-recall report demo" width="780">
+</p>
 
-```
-$ session-recall --report
+## Cross-session patterns
 
-Messages: 26 user, 181 assistant | Tools: 299 | Errors: 8 | Compactions: 2
-
-TOP ISSUES
-  1. [RETRY] Bash x3 (lines 1837-1929)
-  2. [INFLATED SCORE] 10/10 at line 1346, user found issues after
-  3. [CORRECTION] line 1384: "the summary is not enough..."
-
-TOOL EFFICIENCY
-  Tool                  Calls  Errors  Success%
-  Bash                    169       8       95%
-  Read                     43       0      100%
-  Edit                     39       0      100%
-
-SUGGESTED CLAUDE.MD RULES
-  - After 2 failures with Bash, switch approach. Do not retry a third time.
-  - List flaws BEFORE scoring. User found issues after self-scores of 10/10.
-  - Session had multiple compactions. Use workplan files as external brain.
-```
-
-**Cross-session analysis** with `--all` finds recurring problems:
+`--all` analyzes your last N sessions to find recurring problems:
 
 ```
 $ session-recall --all 10
 
 CROSS-SESSION SUMMARY (10 sessions)
-  Total tool calls: 4351
-  Total errors: 165
+  Total tool calls: 4351 | Total errors: 165
 
 RECURRING RETRY PATTERNS
   Bash: retried in 7/10 sessions (avg 4.2x when it happens)
@@ -75,7 +50,9 @@ RECURRING ERROR TYPES
   FILE_NOT_FOUND: in 6/10 sessions
 ```
 
-**Deep analysis** via Gemini (`--deep`) gives project-specific rules instead of generic advice:
+## Deep analysis via Gemini
+
+`--deep` sends structured session data to Gemini for project-specific insights instead of generic advice:
 
 ```
 $ session-recall --report --deep
@@ -83,15 +60,14 @@ $ session-recall --report --deep
 DEEP ANALYSIS (via Gemini)
 
 1. PROJECT CONTEXT: Building a video generation pipeline with Remotion.
-   Agent repeatedly failed on TTS API rate limits.
 
 2. CLAUDE.MD RULES:
    - When ElevenLabs returns 429, wait 30s before retry. Agent wasted 20 calls.
-   - Always check ffmpeg output file exists before proceeding to next render step.
-   - User wants narration synced with visual transitions, not just content-correct.
+   - Always check ffmpeg output file exists before proceeding to next step.
+   - User wants narration synced with visual transitions, not just content.
 
-3. BIGGEST TIME WASTER: 47 minutes retrying a Bash command that was blocked
-   by a pre-commit hook. Switch approach after first hook rejection.
+3. BIGGEST TIME WASTER: 47 minutes retrying a Bash command blocked by a
+   pre-commit hook. Switch approach after first hook rejection.
 ```
 
 ## All commands

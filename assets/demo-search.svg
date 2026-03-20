@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="340" viewBox="0 0 820 340">
+  <style>
+    .terminal { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Monaco, 'Courier New', monospace; font-size: 13px; }
+    .prompt { fill: #50fa7b; }
+    .output { fill: #f8f8f2; }
+    .dim { fill: #6272a4; }
+    .accent { fill: #ff79c6; }
+    .info { fill: #8be9fd; }
+    .heading { fill: #f1fa8c; }
+    .highlight { fill: #f1fa8c; font-weight: bold; }
+  </style>
+  <rect width="820" height="340" rx="10" fill="#282a36"/>
+  <!-- Title bar -->
+  <rect width="820" height="36" rx="10" fill="#44475a"/>
+  <rect y="26" width="820" height="10" fill="#44475a"/>
+  <circle cx="20" cy="18" r="6" fill="#ff5555"/>
+  <circle cx="40" cy="18" r="6" fill="#f1fa8c"/>
+  <circle cx="60" cy="18" r="6" fill="#50fa7b"/>
+  <text x="410" y="22" text-anchor="middle" class="terminal dim" font-size="12">session-recall "deploy" "vercel"</text>
+
+  <g class="terminal" transform="translate(16, 56)">
+    <text y="0" class="prompt">$ session-recall "deploy" "vercel"</text>
+
+    <text y="28" class="dim">Session: 953afe03-f9fd-4ef1-8235-eb84b34093c5 (pinned)</text>
+    <text y="44" class="dim">Size: 7564KB</text>
+    <text y="60" class="dim">---</text>
+    <text y="78" class="info">Found 8 matches (showing last 3):</text>
+
+    <text y="110" class="accent">[assistant] (line 4820)</text>
+    <text y="128" class="output">...deployed to <tspan class="highlight">Vercel</tspan> with --token flag. Production URL: https://app.example.com</text>
+    <text y="146" class="output">Build time: 34s, no errors. The CORS issue was caused by missing...</text>
+    <text y="162" class="dim">---</text>
+
+    <text y="182" class="accent">[user] (line 5102)</text>
+    <text y="200" class="output">...the <tspan class="highlight">deploy</tspan> looks good but the preview URL on <tspan class="highlight">Vercel</tspan> still shows the old</text>
+    <text y="218" class="output">header. Can you check the branch it deployed from?...</text>
+    <text y="234" class="dim">---</text>
+
+    <text y="254" class="accent">[assistant] (line 5140)</text>
+    <text y="272" class="output">...<tspan class="highlight">Vercel</tspan> <tspan class="highlight">deployed</tspan> from fede-dev branch. The preview at fede-dev.example.com</text>
+  </g>
+</svg>
