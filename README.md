@@ -158,7 +158,41 @@ After compaction, Claude can call `recall_search` to recover lost context, then 
 
 ## Auto-trigger after compaction
 
-Add a PreToolUse hook to `~/.claude/settings.json` so Claude is notified when context was compacted:
+Add a PreToolUse hook to `~/.claude/settings.json` so Claude gets notified after context compaction. The hook checks once per session and reminds Claude that MCP recovery tools are available.
+
+**1. Create the hook script** at `~/.claude/hooks/post-compaction-recall.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Must ALWAYS output {"decision": "approve"} on stdout.
+trap 'echo "{\"decision\": \"approve\"}"' EXIT
+
+# Walk process tree to find Claude's PID (session-stable flag key)
+CLAUDE_PID="" PID=$$
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    PARENT=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ') || break
+    [ -z "$PARENT" ] || [ "$PARENT" = "1" ] && break
+    PID="$PARENT"
+    PNAME=$(ps -o comm= -p "$PID" 2>/dev/null | tr -d ' ') || continue
+    case "$PNAME" in claude|node) CLAUDE_PID="$PID"; break ;; esac
+done
+
+FLAG="/tmp/session-recall-post-compact-${CLAUDE_PID:-$$}"
+[ -f "$FLAG" ] && exit 0
+touch "$FLAG" 2>/dev/null || true
+
+if command -v session-recall >/dev/null 2>&1; then
+    session-recall --check-compaction 2>/dev/null && \
+        echo "Context was compacted. MCP tools: recall_search, recall_report" >&2
+fi
+exit 0
+```
+
+```bash
+chmod +x ~/.claude/hooks/post-compaction-recall.sh
+```
+
+**2. Register the hook** in `~/.claude/settings.json`:
 
 ```json
 {
@@ -169,7 +203,7 @@ Add a PreToolUse hook to `~/.claude/settings.json` so Claude is notified when co
         "hooks": [
           {
             "type": "command",
-            "command": "session-recall --check-compaction && echo '{\"decision\": \"approve\"}' || echo '{\"decision\": \"approve\"}'",
+            "command": "~/.claude/hooks/post-compaction-recall.sh",
             "timeout": 5
           }
         ]
@@ -179,7 +213,7 @@ Add a PreToolUse hook to `~/.claude/settings.json` so Claude is notified when co
 }
 ```
 
-`--check-compaction` exits 0 if the current session contains a compaction marker, 1 otherwise. The hook fires once per session and reminds Claude that `recall_search` and `recall_report` MCP tools are available for context recovery.
+`--check-compaction` exits 0 if the current session was compacted, 1 otherwise. The flag file in `/tmp` ensures the check runs only once per Claude process (cleaned on reboot).
 
 ## Setup
 

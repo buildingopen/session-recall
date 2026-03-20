@@ -913,11 +913,21 @@ def main():
         check("check-compaction: compacted session exit 0", rc_cc == 0, f"rc={rc_cc}")
 
         # Non-compacted session: exit 1
-        # Touch fixture_a to make it newest (no compaction markers)
+        # Remove compaction fixture so no session in the dir has the marker
+        # (--check-compaction now checks top 3 recent sessions, not just the newest)
+        compaction_fixture.unlink()
         time.sleep(0.05)
         fixture_a_path.write_text(build_fixture_a())
         out_nc, _, rc_nc = run(["--check-compaction"], env)
         check("check-compaction: clean session exit 1", rc_nc == 1, f"rc={rc_nc}")
+        # Restore compaction fixture for later tests
+        comp_restore = [
+            make_line("user", "user", "Start working on the feature"),
+            make_line("assistant", "assistant", "Working on it."),
+            make_line("user", "user", "This session is being continued from a previous conversation that ran out of context."),
+            make_line("assistant", "assistant", "Continuing the work."),
+        ]
+        compaction_fixture.write_text("\n".join(comp_restore) + "\n")
 
         # --check-compaction in help
         out_help2, _, _ = run(["--help"], env)

@@ -1734,7 +1734,7 @@ def mcp_serve():
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.2.1"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.2"},
             }
         elif method == "notifications/initialized":
             continue
@@ -1788,17 +1788,31 @@ def main():
     project_dirs = find_project_dirs()
 
     # --check-compaction mode: fast check for hook usage
+    # Check pinned session first, then top 3 recent sessions (handles subprocess race)
     if args.check_compaction:
-        session_path = find_current_session(project_dirs)
-        if not session_path:
+        candidates = []
+        pin_file = _pin_path()
+        if pin_file.exists():
+            try:
+                pinned = Path(pin_file.read_text().strip())
+                if pinned.exists():
+                    candidates.append(pinned)
+            except OSError:
+                pass
+        all_sessions = find_all_sessions(project_dirs)
+        for _, _, spath in all_sessions[:3]:
+            if spath not in candidates:
+                candidates.append(spath)
+        if not candidates:
             return 1
-        try:
-            with open(session_path, "r", errors="replace") as f:
-                for raw_line in f:
-                    if "continued from a previous conversation" in raw_line.lower():
-                        return 0
-        except OSError:
-            pass
+        for session_path in candidates:
+            try:
+                with open(session_path, "r", errors="replace") as f:
+                    for raw_line in f:
+                        if "continued from a previous conversation" in raw_line.lower():
+                            return 0
+            except OSError:
+                continue
         return 1
 
     # --unpin mode
