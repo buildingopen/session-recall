@@ -171,19 +171,29 @@ trap 'echo "{\"decision\": \"approve\"}"' EXIT
 CLAUDE_PID="" PID=$$
 for _ in 1 2 3 4 5 6 7 8 9 10; do
     PARENT=$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ') || break
-    [ -z "$PARENT" ] || [ "$PARENT" = "1" ] && break
+    [ -z "$PARENT" ] || [ "$PARENT" = "1" ] || [ "$PARENT" = "0" ] && break
     PID="$PARENT"
     PNAME=$(ps -o comm= -p "$PID" 2>/dev/null | tr -d ' ') || continue
-    case "$PNAME" in claude|node) CLAUDE_PID="$PID"; break ;; esac
+    case "$PNAME" in claude|claude-code|node) CLAUDE_PID="$PID"; break ;; esac
 done
 
 FLAG="/tmp/session-recall-post-compact-${CLAUDE_PID:-$$}"
 [ -f "$FLAG" ] && exit 0
 touch "$FLAG" 2>/dev/null || true
 
+# Try PATH, then common install paths, then npx
+RECALL=""
 if command -v session-recall >/dev/null 2>&1; then
-    session-recall --check-compaction 2>/dev/null && \
-        echo "Context was compacted. MCP tools: recall_search, recall_report" >&2
+    RECALL="session-recall"
+elif [ -x /usr/local/bin/session-recall ]; then
+    RECALL="/usr/local/bin/session-recall"
+elif command -v npx >/dev/null 2>&1; then
+    RECALL="npx -y session-recall"
+fi
+
+if [ -n "$RECALL" ]; then
+    $RECALL --check-compaction 2>/dev/null && \
+        echo "Context was compacted. MCP tools: recall_search, recall_report, recall_recent" >&2
 fi
 exit 0
 ```

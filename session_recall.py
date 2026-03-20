@@ -962,9 +962,35 @@ def _append_to_file(filepath, section_header, items):
 
     Tracks code fence state (``` toggles) so that section headers
     appearing inside fenced code blocks are not matched.
+    Uses flock to prevent concurrent writes from corrupting the file.
     """
+    import fcntl
     filepath = Path(filepath)
-    existing = filepath.read_text() if filepath.exists() else ""
+
+    # Acquire exclusive lock for the duration of read-modify-write
+    lock_path = filepath.parent / f".{filepath.name}.lock"
+    lock_fd = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+    except OSError:
+        pass  # Best effort: proceed without lock if it fails
+
+    try:
+        existing = filepath.read_text() if filepath.exists() else ""
+        _append_to_file_inner(filepath, section_header, items, existing)
+    finally:
+        if lock_fd:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                lock_fd.close()
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _append_to_file_inner(filepath, section_header, items, existing):
 
     # Check if section already exists (outside code fences)
     lines = existing.split("\n")
@@ -1802,7 +1828,7 @@ def mcp_serve():
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.2.4"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.5"},
             }
         elif method == "notifications/initialized":
             continue
