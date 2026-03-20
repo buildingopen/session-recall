@@ -458,7 +458,17 @@ def rpt_errors(entries):
 
 
 def rpt_retries(entries):
-    """Find retry loops: same tool+similar input called multiple times in proximity."""
+    """Find retry loops: same tool+similar input called multiple times in proximity.
+
+    Also captures error messages from tool_results to explain WHY retries failed.
+    """
+    # Build a map of line -> error text from tool_results
+    error_by_line = {}
+    for entry in entries:
+        for tr in entry["tool_results"]:
+            if tr["is_error"] and tr["content"]:
+                error_by_line[entry["line"]] = tr["content"][:150]
+
     calls = []
     for entry in entries:
         for tu in entry["tool_uses"]:
@@ -482,24 +492,40 @@ def rpt_retries(entries):
                 cluster.append(occ)
             else:
                 if len(cluster) >= 3:
+                    # Find first error near the cluster
+                    err_text = _find_cluster_error(cluster, error_by_line)
                     retries.append({
                         "tool": cluster[0]["name"],
                         "input_preview": cluster[0]["input"][:100],
                         "count": len(cluster),
                         "first_line": cluster[0]["line"],
                         "last_line": cluster[-1]["line"],
+                        "error_text": err_text,
                     })
                 cluster = [occ]
         if len(cluster) >= 3:
+            err_text = _find_cluster_error(cluster, error_by_line)
             retries.append({
                 "tool": cluster[0]["name"],
                 "input_preview": cluster[0]["input"][:100],
                 "count": len(cluster),
                 "first_line": cluster[0]["line"],
                 "last_line": cluster[-1]["line"],
+                "error_text": err_text,
             })
 
     return sorted(retries, key=lambda x: x["count"], reverse=True)
+
+
+def _find_cluster_error(cluster, error_by_line):
+    """Find the first error message near a retry cluster's lines."""
+    for occ in cluster:
+        # Error tool_result typically appears 1-3 lines after the tool_use
+        for offset in range(1, 5):
+            err = error_by_line.get(occ["line"] + offset)
+            if err:
+                return err
+    return ""
 
 
 def rpt_corrections(entries):
@@ -600,7 +626,7 @@ def generate_lessons(retries, errors, corrections, scores, compactions):
     rules = []  # CLAUDE.md-style rules
     memories = []  # MEMORY.md-style facts
 
-    # From retries: include the actual command/input that was retried
+    # From retries: include the actual command/input AND the error that caused failure
     retry_tools = set()
     for r in retries:
         tool = r["tool"]
@@ -608,10 +634,19 @@ def generate_lessons(retries, errors, corrections, scores, compactions):
             retry_tools.add(tool)
             preview = r.get("input_preview", "")[:80]
             line_info = f"lines {r['first_line']}-{r['last_line']}"
-            rules.append(
-                f"{tool} command retried {r['count']}x ({line_info}): `{preview}`. "
-                f"After 2 failures with {tool}, switch approach instead of retrying."
-            )
+            err = r.get("error_text", "")
+            if err:
+                # Include the actual error, making the rule actionable
+                err_short = err.split("\n")[0][:100]
+                rules.append(
+                    f"{tool} retried {r['count']}x ({line_info}): `{preview}`. "
+                    f"Error: {err_short}. Fix the root cause instead of retrying."
+                )
+            else:
+                rules.append(
+                    f"{tool} command retried {r['count']}x ({line_info}): `{preview}`. "
+                    f"After 2 failures with {tool}, switch approach instead of retrying."
+                )
 
     # From errors: include specific error examples
     cats = errors.get("by_category", {})
@@ -865,7 +900,10 @@ def _find_memory_md():
         if path == Path("/"):
             break
     # Fallback: most recently modified project dir
-    project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    try:
+        project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    except (PermissionError, OSError):
+        return None
     for d in project_dirs:
         if d.is_dir() and not d.name.startswith("."):
             mem_dir = d / "memory"
@@ -1764,7 +1802,7 @@ def mcp_serve():
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.2.3"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.4"},
             }
         elif method == "notifications/initialized":
             continue

@@ -824,6 +824,22 @@ def main():
             result_bad_target = sr_mod._mcp_handle_tool("recall_apply", {"text": "rule", "target": "invalid"})
             check("mcp: recall_apply bad target", result_bad_target.get("isError", False), f"got: {result_bad_target}")
 
+        # MCP error handling: malformed params (non-dict)
+        mcp_bad_params = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_bad_params += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": "not a dict"}) + "\n"
+        mcp_proc_bad = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_bad_params, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_bad_lines = [l for l in mcp_proc_bad.stdout.strip().split("\n") if l.strip()]
+        if len(mcp_bad_lines) >= 2:
+            bad_resp = json.loads(mcp_bad_lines[1])
+            check("mcp: malformed params returns error", "error" in bad_resp, f"got: {bad_resp}")
+            check("mcp: malformed params error code", bad_resp.get("error", {}).get("code") == -32602, f"got: {bad_resp}")
+        else:
+            check("mcp: malformed params response", False, f"only {len(mcp_bad_lines)} lines")
+
         # ==========================================
         print(f"\n=== _find_memory_md() path resolution ===")
         # ==========================================
@@ -969,10 +985,12 @@ def main():
             scores_r = sr_mod.rpt_scores(entries_r)
             compactions_r = sr_mod.rpt_compactions(entries_r)
             rules_r, memories_r = sr_mod.generate_lessons(retries_r, errors_r, corrections_r, scores_r, compactions_r)
-            # Rules should contain specific command previews AND actionable advice
+            # Rules should contain specific command previews AND error text (why it failed)
             has_command = any("npm test" in r for r in rules_r)
-            has_advice = any("switch approach" in r.lower() or "after 2 failures" in r.lower() for r in rules_r)
+            has_error = any("test failed" in r.lower() or "error" in r.lower() for r in rules_r)
+            has_advice = any("root cause" in r.lower() or "switch approach" in r.lower() for r in rules_r)
             check("rule quality: includes specific context", has_command and has_advice, f"rules: {rules_r}")
+            check("rule quality: includes error text", has_error, f"rules: {rules_r}")
             # Memories should contain actual correction text
             has_correction_text = any("database" in m.lower() for m in memories_r)
             check("rule quality: memories include correction text", has_correction_text, f"memories: {memories_r}")
