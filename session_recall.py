@@ -774,6 +774,231 @@ Analyze the session data below and produce:
 Output in plain text, no markdown headers, just numbered sections. Be concise and direct."""
 
 
+DEEP_PROMPT_JSON = """You are analyzing a Claude Code session transcript to extract project-specific lessons.
+
+Your job is to find SPECIFIC, ACTIONABLE insights about THIS project and THIS session. NOT generic advice.
+
+BAD (generic): "Don't retry commands too many times"
+GOOD (specific): "When ElevenLabs TTS API returns 429, wait 30s before retrying. The agent wasted 20 calls without backoff."
+
+Analyze the session data below and return ONLY valid JSON with this structure:
+{
+  "project_context": "1-2 sentence description of what this session was about",
+  "rules": [
+    "Imperative rule 1 referencing a concrete event",
+    "Imperative rule 2..."
+  ],
+  "memories": [
+    "Fact or preference to remember 1",
+    "Fact or preference to remember 2..."
+  ],
+  "biggest_time_waster": "Description of the biggest time waste and how to prevent it"
+}
+
+Rules (3-7): Must be imperative ("Always X", "Never Y"), specific to THIS project.
+Memories (2-5): User preferences, technical decisions, pitfalls, corrections.
+
+Return ONLY the JSON object, no markdown fences, no commentary."""
+
+
+# --- --apply: HITL review + append to CLAUDE.md / MEMORY.md ---
+
+
+def _find_claude_md():
+    """Find CLAUDE.md in current directory or parents."""
+    cwd = Path.cwd()
+    for d in [cwd] + list(cwd.parents):
+        candidate = d / "CLAUDE.md"
+        if candidate.exists():
+            return candidate
+        # Stop at home or root
+        if d == Path.home() or d == Path("/"):
+            break
+    # Default: create in cwd
+    return cwd / "CLAUDE.md"
+
+
+def _find_memory_md():
+    """Find the auto-memory MEMORY.md for the current project."""
+    # Claude Code stores per-project memory in ~/.claude/projects/<hash>/memory/MEMORY.md
+    projects_dir = Path.home() / ".claude" / "projects"
+    if not projects_dir.is_dir():
+        return None
+    # Find the project dir for cwd by checking encoded path
+    cwd = str(Path.cwd())
+    cwd_encoded = cwd.replace("/", "-")
+    for d in projects_dir.iterdir():
+        if d.is_dir() and d.name == cwd_encoded:
+            mem_dir = d / "memory"
+            mem_dir.mkdir(exist_ok=True)
+            return mem_dir / "MEMORY.md"
+    # Fallback: most recently modified project dir
+    project_dirs = sorted(projects_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+    for d in project_dirs:
+        if d.is_dir() and not d.name.startswith("."):
+            mem_dir = d / "memory"
+            if mem_dir.exists():
+                return mem_dir / "MEMORY.md"
+    return None
+
+
+def _hitl_review(items, item_type):
+    """Interactive review of items. Returns list of approved items."""
+    if not items:
+        return []
+    approved = []
+    print(f"\n{'=' * 50}")
+    print(f"REVIEW {item_type.upper()} ({len(items)} items)")
+    print(f"{'=' * 50}")
+    print(f"  [y] approve  [n] skip  [e] edit  [a] approve all  [q] quit\n")
+
+    for i, item in enumerate(items):
+        print(f"  ({i + 1}/{len(items)}) {item}")
+        while True:
+            try:
+                choice = input("  > ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return approved
+            if choice in ("y", "yes", ""):
+                approved.append(item)
+                break
+            elif choice in ("n", "no", "s", "skip"):
+                break
+            elif choice in ("e", "edit"):
+                try:
+                    edited = input("  new text> ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print()
+                    return approved
+                if edited:
+                    approved.append(edited)
+                break
+            elif choice in ("a", "all"):
+                approved.append(item)
+                approved.extend(items[i + 1:])
+                print(f"  Approved all remaining ({len(items) - i} items)")
+                return approved
+            elif choice in ("q", "quit"):
+                return approved
+            else:
+                print("  [y/n/e/a/q]?")
+        print()
+    return approved
+
+
+def _append_to_file(filepath, section_header, items):
+    """Append items under a section header in a file."""
+    filepath = Path(filepath)
+    existing = filepath.read_text() if filepath.exists() else ""
+
+    # Check if section already exists
+    if section_header in existing:
+        # Append to existing section (before next ## or end of file)
+        lines = existing.split("\n")
+        insert_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == section_header:
+                # Find the end of this section (next ## or EOF)
+                for j in range(i + 1, len(lines)):
+                    if lines[j].startswith("## ") and lines[j].strip() != section_header:
+                        insert_idx = j
+                        break
+                if insert_idx is None:
+                    insert_idx = len(lines)
+                break
+        if insert_idx is not None:
+            new_lines = [f"- {item}" for item in items]
+            lines = lines[:insert_idx] + new_lines + lines[insert_idx:]
+            filepath.write_text("\n".join(lines))
+            return
+    else:
+        # Add new section at end
+        separator = "\n" if existing and not existing.endswith("\n") else ""
+        section = separator + "\n" + section_header + "\n" + "\n".join(f"- {item}" for item in items) + "\n"
+        filepath.write_text(existing + section)
+
+
+def cmd_apply(session_path, deep=False):
+    """Generate rules, HITL review, append to CLAUDE.md / MEMORY.md."""
+    entries = parse_entries(session_path)
+    if not entries:
+        print("No messages found in session.", file=sys.stderr)
+        return 1
+
+    retries = rpt_retries(entries)
+    errors = rpt_errors(entries)
+    corrections = rpt_corrections(entries)
+    scores = rpt_scores(entries)
+    compactions = rpt_compactions(entries)
+
+    # Collect template-based rules and memories
+    rules, memories = generate_lessons(retries, errors, corrections, scores, compactions)
+
+    # Deep analysis adds more
+    if deep:
+        print("Running Gemini deep analysis...")
+        context = build_deep_context(entries, retries, errors, corrections, scores, compactions)
+        raw = call_gemini(DEEP_PROMPT_JSON, context)
+        try:
+            # Strip markdown fences if present
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1]
+            if cleaned.endswith("```"):
+                cleaned = cleaned.rsplit("```", 1)[0]
+            cleaned = cleaned.strip()
+            data = json.loads(cleaned)
+            deep_rules = data.get("rules", [])
+            deep_memories = data.get("memories", [])
+            context_str = data.get("project_context", "")
+            time_waster = data.get("biggest_time_waster", "")
+            if context_str:
+                print(f"\nProject: {context_str}")
+            if time_waster:
+                print(f"Biggest time waster: {time_waster}")
+            # Deduplicate: only add deep rules that aren't too similar to template rules
+            for dr in deep_rules:
+                if not any(dr[:40].lower() in r.lower() for r in rules):
+                    rules.append(dr)
+            for dm in deep_memories:
+                if not any(dm[:40].lower() in m.lower() for m in memories):
+                    memories.append(dm)
+        except (json.JSONDecodeError, KeyError, AttributeError):
+            print(f"Could not parse Gemini response as JSON. Raw output:\n{raw[:500]}", file=sys.stderr)
+
+    if not rules and not memories:
+        print("No rules or memories to apply.")
+        return 0
+
+    # HITL review
+    approved_rules = _hitl_review(rules, "CLAUDE.MD rules")
+    approved_memories = _hitl_review(memories, "MEMORY.MD entries")
+
+    if not approved_rules and not approved_memories:
+        print("Nothing approved. No changes made.")
+        return 0
+
+    # Apply
+    if approved_rules:
+        claude_md = _find_claude_md()
+        _append_to_file(claude_md, "## Session Recall Rules", approved_rules)
+        print(f"Appended {len(approved_rules)} rules to {claude_md}")
+
+    if approved_memories:
+        memory_md = _find_memory_md()
+        if memory_md:
+            _append_to_file(memory_md, "## Session Recall Insights", approved_memories)
+            print(f"Appended {len(approved_memories)} entries to {memory_md}")
+        else:
+            # Fallback: print for manual copy
+            print("Could not locate MEMORY.md. Approved entries:")
+            for m in approved_memories:
+                print(f"  - {m}")
+
+    return 0
+
+
 def cmd_report(session_path, deep=False):
     """Generate session analysis report with improvement suggestions."""
     entries = parse_entries(session_path)
@@ -1218,6 +1443,277 @@ def resolve_session(args, project_dirs):
     return find_current_session(project_dirs)
 
 
+# --- MCP Server (stdin/stdout JSON-RPC) ---
+
+
+def _mcp_capture(func, *args, **kwargs):
+    """Capture stdout from a function call."""
+    from io import StringIO
+    old = sys.stdout
+    sys.stdout = buf = StringIO()
+    try:
+        func(*args, **kwargs)
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+
+def _mcp_tool_result(text):
+    return {"content": [{"type": "text", "text": text}]}
+
+
+def _mcp_tool_error(text):
+    return {"content": [{"type": "text", "text": text}], "isError": True}
+
+
+def _mcp_resolve_session(project_dirs, session_keyword=None):
+    if session_keyword:
+        found = find_session_by_keyword(project_dirs, session_keyword)
+        if found:
+            return found
+    return find_current_session(project_dirs)
+
+
+MCP_TOOLS = [
+    {
+        "name": "recall_search",
+        "description": (
+            "Search past Claude Code session transcripts for keywords. "
+            "Use after context compaction to recover lost details: "
+            "decisions, error solutions, commands that worked, corrections."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "keywords": {"type": "array", "items": {"type": "string"},
+                             "description": "Keywords to search for (AND logic)."},
+                "session_keyword": {"type": "string",
+                                    "description": "Optional: find session containing this keyword first."},
+                "max_results": {"type": "integer", "default": 10},
+            },
+            "required": ["keywords"],
+        },
+    },
+    {
+        "name": "recall_recent",
+        "description": (
+            "Get last N human/assistant messages from current session. "
+            "Skips tool noise. Useful for recovering conversation context after compaction."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "default": 20},
+                "session_keyword": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "recall_report",
+        "description": (
+            "Analyze session for patterns: retry loops, errors, corrections, "
+            "inflated self-scores. Returns suggested CLAUDE.md rules and MEMORY.md entries."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "deep": {"type": "boolean", "default": False,
+                          "description": "Use Gemini for project-specific insights."},
+                "session_keyword": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "recall_apply",
+        "description": (
+            "Append an approved rule or memory to CLAUDE.md or MEMORY.md. "
+            "User MUST explicitly approve each item before calling this."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Rule or memory text to append."},
+                "target": {"type": "string", "enum": ["claude_md", "memory_md"]},
+            },
+            "required": ["text", "target"],
+        },
+    },
+    {
+        "name": "recall_decisions",
+        "description": "Find decision points in the session (chose X, going with Y, decided Z).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "session_keyword": {"type": "string"},
+                "max_results": {"type": "integer", "default": 10},
+            },
+        },
+    },
+    {
+        "name": "recall_list",
+        "description": "List recent Claude Code session files with timestamps and sizes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "count": {"type": "integer", "default": 10},
+            },
+        },
+    },
+]
+
+
+def _mcp_handle_tool(name, args):
+    """Handle a single MCP tool call."""
+    project_dirs = find_project_dirs()
+
+    if name == "recall_search":
+        keywords = args.get("keywords", [])
+        if not keywords:
+            return _mcp_tool_error("keywords is required")
+        sp = _mcp_resolve_session(project_dirs, args.get("session_keyword"))
+        if not sp:
+            return _mcp_tool_error("No session found")
+        out = _mcp_capture(cmd_search, sp, keywords, max_results=args.get("max_results", 10))
+        return _mcp_tool_result(out or "No matches found.")
+
+    elif name == "recall_recent":
+        sp = _mcp_resolve_session(project_dirs, args.get("session_keyword"))
+        if not sp:
+            return _mcp_tool_error("No session found")
+        out = _mcp_capture(cmd_recent, sp, args.get("count", 20))
+        return _mcp_tool_result(out or "No messages found.")
+
+    elif name == "recall_report":
+        sp = _mcp_resolve_session(project_dirs, args.get("session_keyword"))
+        if not sp:
+            return _mcp_tool_error("No session found")
+        entries = parse_entries(sp)
+        if not entries:
+            return _mcp_tool_error("No messages in session")
+        retries = rpt_retries(entries)
+        errors = rpt_errors(entries)
+        corrections = rpt_corrections(entries)
+        scores = rpt_scores(entries)
+        compactions = rpt_compactions(entries)
+        rules, memories = generate_lessons(retries, errors, corrections, scores, compactions)
+        result = {
+            "stats": {
+                "user_messages": sum(1 for e in entries if e["role"] == "user" and e["text"].strip()),
+                "tool_calls": sum(len(e["tool_uses"]) for e in entries),
+                "errors": errors["total"],
+                "compactions": len(compactions),
+            },
+            "retry_loops": [{"tool": r["tool"], "count": r["count"]} for r in retries[:5]],
+            "error_categories": errors["by_category"],
+            "corrections": [c["text"][:200] for c in corrections[:5]],
+            "inflated_scores": [{"score": s["score"], "line": s["line"]}
+                                for s in scores if s["correction_after"]],
+            "suggested_rules": rules,
+            "suggested_memories": memories,
+        }
+        if args.get("deep", False):
+            context = build_deep_context(entries, retries, errors, corrections, scores, compactions)
+            raw = call_gemini(DEEP_PROMPT_JSON, context)
+            try:
+                cleaned = raw.strip()
+                if cleaned.startswith("```"):
+                    cleaned = cleaned.split("\n", 1)[1]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned.rsplit("```", 1)[0]
+                deep_data = json.loads(cleaned.strip())
+                result["deep_analysis"] = deep_data
+                for dr in deep_data.get("rules", []):
+                    if dr not in result["suggested_rules"]:
+                        result["suggested_rules"].append(dr)
+                for dm in deep_data.get("memories", []):
+                    if dm not in result["suggested_memories"]:
+                        result["suggested_memories"].append(dm)
+            except (json.JSONDecodeError, KeyError):
+                result["deep_analysis_raw"] = raw[:2000]
+        return _mcp_tool_result(json.dumps(result, indent=2))
+
+    elif name == "recall_apply":
+        text = args.get("text", "").strip()
+        target = args.get("target", "")
+        if not text:
+            return _mcp_tool_error("text is required")
+        if target == "claude_md":
+            path = _find_claude_md()
+            _append_to_file(path, "## Session Recall Rules", [text])
+            return _mcp_tool_result("Appended rule to {}".format(path))
+        elif target == "memory_md":
+            path = _find_memory_md()
+            if not path:
+                return _mcp_tool_error("Could not locate MEMORY.md")
+            _append_to_file(path, "## Session Recall Insights", [text])
+            return _mcp_tool_result("Appended entry to {}".format(path))
+        else:
+            return _mcp_tool_error("target must be 'claude_md' or 'memory_md'")
+
+    elif name == "recall_decisions":
+        sp = _mcp_resolve_session(project_dirs, args.get("session_keyword"))
+        if not sp:
+            return _mcp_tool_error("No session found")
+        out = _mcp_capture(cmd_decisions, sp, args.get("max_results", 10))
+        return _mcp_tool_result(out or "No decision points found.")
+
+    elif name == "recall_list":
+        sessions = find_all_sessions(project_dirs)
+        count = args.get("count", 10)
+        lines = []
+        for mtime, fsize, path in sessions[:count]:
+            ts = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            lines.append("{} {:>8} {}".format(ts, format_size(fsize), path.name))
+        return _mcp_tool_result("\n".join(lines) if lines else "No sessions found.")
+
+    return _mcp_tool_error("Unknown tool: {}".format(name))
+
+
+def mcp_serve():
+    """Run MCP server over stdin/stdout."""
+    sys.stdout = open(sys.stdout.fileno(), 'w', buffering=1)
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        method = msg.get("method", "")
+        msg_id = msg.get("id")
+        params = msg.get("params", {})
+
+        result = None
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "session-recall", "version": "1.1.0"},
+            }
+        elif method == "notifications/initialized":
+            continue
+        elif method == "tools/list":
+            result = {"tools": MCP_TOOLS}
+        elif method == "tools/call":
+            result = _mcp_handle_tool(params.get("name", ""), params.get("arguments", {}))
+        elif method == "ping":
+            result = {}
+        else:
+            if msg_id is not None:
+                resp = {"jsonrpc": "2.0", "id": msg_id,
+                        "error": {"code": -32601, "message": "Method not found"}}
+                print(json.dumps(resp), flush=True)
+            continue
+
+        if msg_id is not None:
+            print(json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": result}), flush=True)
+
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Search Claude Code session transcripts to recover context.",
@@ -1232,12 +1728,18 @@ def main():
     parser.add_argument("--decisions", action="store_true", help="Find decision points")
     parser.add_argument("--report", action="store_true", help="Analyze session: errors, retries, corrections, suggested rules")
     parser.add_argument("--deep", action="store_true", help="Add Gemini-powered deep analysis to --report (project-specific insights)")
+    parser.add_argument("--apply", action="store_true", help="Review and append rules to CLAUDE.md / MEMORY.md (interactive)")
     parser.add_argument("--all", type=int, nargs="?", const=10, metavar="N", help="Cross-session analysis (last N sessions, default 10). Use with --report")
+    parser.add_argument("--mcp", action="store_true", help="Run as MCP server (stdin/stdout JSON-RPC)")
     parser.add_argument("--pin", action="store_true", help="Pin the resolved session for subsequent calls")
     parser.add_argument("--pin-by", type=str, metavar="KEYWORD", help="Find and pin the session containing KEYWORD")
     parser.add_argument("--unpin", action="store_true", help="Remove session pin")
 
     args = parser.parse_args()
+
+    # --mcp mode: launch MCP server
+    if args.mcp:
+        return mcp_serve()
 
     project_dirs = find_project_dirs()
 
@@ -1282,6 +1784,10 @@ def main():
     # --decisions mode
     if args.decisions:
         return cmd_decisions(session_path, args.max)
+
+    # --apply mode
+    if args.apply:
+        return cmd_apply(session_path, deep=args.deep)
 
     # --report mode (--all implies --report)
     if args.report or args.all is not None:

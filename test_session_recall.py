@@ -634,6 +634,130 @@ def main():
         check("all: empty dir returns 1", rc_empty == 1, f"rc={rc_empty}")
         shutil.rmtree(empty_tmpdir, ignore_errors=True)
 
+        # ==========================================
+        print(f"\n=== --apply ===")
+        # ==========================================
+
+        # --apply with no input (should parse but need interactive, so test with pipe)
+        out_apply, err_apply, rc_apply = run(["--apply"], env)
+        # Should not crash; may say "no rules" or exit cleanly
+        check("apply: runs without crash", rc_apply in (0, 1), f"rc={rc_apply}")
+
+        # --apply shows up in --help
+        out_help, _, _ = run(["--help"], env)
+        check("apply: in help text", "--apply" in out_help, "not in help")
+
+        # --apply on empty file returns 1
+        empty_apply_dir = Path(tmpdir) / "empty-apply-proj"
+        empty_apply_dir.mkdir(exist_ok=True)
+        empty_apply = empty_apply_dir / "empty-apply.jsonl"
+        empty_apply.write_text("")
+        out_apply_empty, _, rc_apply_empty = run(["--apply", "--session", str(empty_apply)], env)
+        check("apply: empty file returns 1", rc_apply_empty == 1, f"rc={rc_apply_empty}")
+
+        # Test _find_claude_md and _find_memory_md imports
+        import importlib.util
+        # Try repo path first, then installed path
+        sr_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session_recall.py")
+        if not os.path.exists(sr_path):
+            sr_path = SCRIPT
+        spec = importlib.util.spec_from_file_location("session_recall_mod", sr_path)
+        if spec and spec.loader:
+            sr_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(sr_mod)
+            # _find_claude_md should return a Path
+            claude_md = sr_mod._find_claude_md()
+            check("apply: _find_claude_md returns Path", isinstance(claude_md, Path), f"got {type(claude_md)}")
+
+            # _append_to_file creates new section
+            test_append_file = Path(tmpdir) / "test-append.md"
+            sr_mod._append_to_file(test_append_file, "## Test Section", ["rule one", "rule two"])
+            content = test_append_file.read_text()
+            check("apply: append creates section", "## Test Section" in content and "- rule one" in content,
+                  f"content: {content[:200]}")
+
+            # _append_to_file appends to existing section
+            sr_mod._append_to_file(test_append_file, "## Test Section", ["rule three"])
+            content2 = test_append_file.read_text()
+            check("apply: append to existing section", "- rule three" in content2 and "- rule one" in content2,
+                  f"content: {content2[:200]}")
+
+            # _hitl_review with empty list returns empty
+            result = sr_mod._hitl_review([], "test")
+            check("apply: hitl empty list", result == [], f"got {result}")
+        else:
+            check("apply: module import", False, "could not import session_recall module")
+
+        # ==========================================
+        print(f"\n=== --mcp ===")
+        # ==========================================
+
+        # --mcp flag shows up in help
+        check("mcp: in help text", "--mcp" in out_help, "not in help")
+
+        # MCP server responds to initialize
+        mcp_input = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_input += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
+
+        mcp_proc = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_input, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_lines = [l for l in mcp_proc.stdout.strip().split("\n") if l.strip()]
+        check("mcp: server responds", len(mcp_lines) >= 2, f"got {len(mcp_lines)} lines")
+
+        if len(mcp_lines) >= 1:
+            init_resp = json.loads(mcp_lines[0])
+            check("mcp: initialize response", init_resp.get("result", {}).get("serverInfo", {}).get("name") == "session-recall",
+                  f"got {init_resp}")
+
+        if len(mcp_lines) >= 2:
+            tools_resp = json.loads(mcp_lines[1])
+            tool_names = [t["name"] for t in tools_resp.get("result", {}).get("tools", [])]
+            check("mcp: has recall_search", "recall_search" in tool_names, f"tools: {tool_names}")
+            check("mcp: has recall_report", "recall_report" in tool_names, f"tools: {tool_names}")
+            check("mcp: has recall_apply", "recall_apply" in tool_names, f"tools: {tool_names}")
+            check("mcp: has recall_recent", "recall_recent" in tool_names, f"tools: {tool_names}")
+            check("mcp: has recall_decisions", "recall_decisions" in tool_names, f"tools: {tool_names}")
+            check("mcp: has recall_list", "recall_list" in tool_names, f"tools: {tool_names}")
+
+        # MCP tool call: recall_search
+        mcp_search = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_search += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "recall_search", "arguments": {"keywords": ["ZEPHYR"], "session_keyword": "ZEPHYR"}
+        }}) + "\n"
+        mcp_proc2 = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_search, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_lines2 = [l for l in mcp_proc2.stdout.strip().split("\n") if l.strip()]
+        if len(mcp_lines2) >= 2:
+            search_resp = json.loads(mcp_lines2[1])
+            search_text = search_resp.get("result", {}).get("content", [{}])[0].get("text", "")
+            check("mcp: recall_search finds ZEPHYR", "ZEPHYR" in search_text, f"got: {search_text[:100]}")
+        else:
+            check("mcp: recall_search response", False, f"only {len(mcp_lines2)} lines")
+
+        # MCP tool call: recall_list
+        mcp_list = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
+        mcp_list += json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+            "name": "recall_list", "arguments": {"count": 5}
+        }}) + "\n"
+        mcp_proc3 = subprocess.run(
+            [sys.executable, SCRIPT, "--mcp"],
+            input=mcp_list, capture_output=True, text=True, timeout=10,
+            env={**os.environ, "CLAUDE_PROJECTS_DIR": tmpdir, "SESSION_RECALL_NS": pin_ns},
+        )
+        mcp_lines3 = [l for l in mcp_proc3.stdout.strip().split("\n") if l.strip()]
+        if len(mcp_lines3) >= 2:
+            list_resp = json.loads(mcp_lines3[1])
+            list_text = list_resp.get("result", {}).get("content", [{}])[0].get("text", "")
+            check("mcp: recall_list shows sessions", ".jsonl" in list_text, f"got: {list_text[:100]}")
+        else:
+            check("mcp: recall_list response", False, f"only {len(mcp_lines3)} lines")
+
     finally:
         # Cleanup
         shutil.rmtree(tmpdir, ignore_errors=True)

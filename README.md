@@ -90,7 +90,66 @@ session-recall --report               # Errors, retries, corrections, rules
 session-recall --report --deep        # + Gemini project-specific insights
 session-recall --all                  # Cross-session patterns (last 10)
 session-recall --all 20 --deep        # Cross-session + Gemini
+
+# Apply rules (interactive review, then append to CLAUDE.md / MEMORY.md)
+session-recall --apply                # Template-based rules
+session-recall --apply --deep         # + Gemini project-specific rules
 ```
+
+## Apply rules to CLAUDE.md
+
+`--apply` generates rules, shows each one for review, and appends approved rules to your project's CLAUDE.md:
+
+```
+$ session-recall --apply --deep
+
+Running Gemini deep analysis...
+Project: Building session-recall CLI tool for Claude Code transcript recovery.
+
+==================================================
+REVIEW CLAUDE.MD RULES (5 items)
+==================================================
+  [y] approve  [n] skip  [e] edit  [a] approve all  [q] quit
+
+  (1/5) After 2 failures with Bash, switch approach. Do not retry a third time.
+  > y
+
+  (2/5) When Gemini returns malformed JSON, strip markdown fences before parsing.
+  > e
+  new text> Strip ```json fences from Gemini responses before JSON.parse().
+  ...
+
+Appended 4 rules to /root/my-project/CLAUDE.md
+Appended 2 entries to ~/.claude/projects/-root-my-project/memory/MEMORY.md
+```
+
+## MCP server
+
+Give Claude Code direct access to past session context. Add to `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "session-recall": {
+      "command": "npx",
+      "args": ["-y", "session-recall", "--mcp"]
+    }
+  }
+}
+```
+
+Claude Code gets 6 tools:
+
+| Tool | What it does |
+|------|-------------|
+| `recall_search` | Search past sessions by keyword |
+| `recall_recent` | Get last N messages (no tool noise) |
+| `recall_report` | Analyze session patterns and suggest rules |
+| `recall_apply` | Append approved rule to CLAUDE.md or MEMORY.md |
+| `recall_decisions` | Find decision points |
+| `recall_list` | List available sessions |
+
+After compaction, Claude can call `recall_search` to recover lost context, then `recall_report` to suggest rules, and `recall_apply` (with your approval) to persist the lessons.
 
 ## Setup
 
@@ -98,7 +157,7 @@ session-recall --all 20 --deep        # Cross-session + Gemini
 npx session-recall --help
 ```
 
-For deep analysis, add a Gemini key:
+For deep analysis and MCP `--deep` mode, add a Gemini key:
 
 ```bash
 mkdir -p ~/.config/session-recall
