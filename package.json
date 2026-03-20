@@ -1,6 +1,6 @@
 {
   "name": "session-recall",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Search and analyze Claude Code session transcripts to recover context after compaction",
   "bin": {
     "session-recall": "bin/session-recall.js"
