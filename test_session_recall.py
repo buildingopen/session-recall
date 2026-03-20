@@ -969,9 +969,10 @@ def main():
             scores_r = sr_mod.rpt_scores(entries_r)
             compactions_r = sr_mod.rpt_compactions(entries_r)
             rules_r, memories_r = sr_mod.generate_lessons(retries_r, errors_r, corrections_r, scores_r, compactions_r)
-            # Rules should contain specific tool names and line numbers
-            has_specific = any("npm test" in r or "lines" in r for r in rules_r)
-            check("rule quality: includes specific context", has_specific, f"rules: {rules_r}")
+            # Rules should contain specific command previews AND actionable advice
+            has_command = any("npm test" in r for r in rules_r)
+            has_advice = any("switch approach" in r.lower() or "after 2 failures" in r.lower() for r in rules_r)
+            check("rule quality: includes specific context", has_command and has_advice, f"rules: {rules_r}")
             # Memories should contain actual correction text
             has_correction_text = any("database" in m.lower() for m in memories_r)
             check("rule quality: memories include correction text", has_correction_text, f"memories: {memories_r}")

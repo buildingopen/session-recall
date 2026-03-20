@@ -851,7 +851,10 @@ def _find_memory_md():
     # Walk up cwd path trying each parent: /root/session-recall -> try -root-session-recall, then -root
     cwd = Path.cwd()
     candidates = [cwd] + list(cwd.parents)
-    existing_dirs = {d.name: d for d in projects_dir.iterdir() if d.is_dir()}
+    try:
+        existing_dirs = {d.name: d for d in projects_dir.iterdir() if d.is_dir()}
+    except PermissionError:
+        return None
     for path in candidates:
         encoded = str(path).replace("/", "-")
         if encoded in existing_dirs:
@@ -1393,26 +1396,47 @@ def cmd_report_all(project_dirs, count=10, deep=False):
 
 
 def _find_claude_pid():
-    """Walk up PPID chain to find the Claude Code process. Returns PID or None."""
+    """Walk up PPID chain to find the Claude Code process. Returns PID or None.
+
+    Uses subprocess + ps for portability (works on Linux and macOS).
+    Falls back to /proc on Linux if ps is unavailable.
+    """
+    import subprocess
     try:
         pid = os.getppid()
-        for _ in range(10):  # max 10 levels
+        for _ in range(10):
             if pid <= 1:
                 break
-            comm_path = f"/proc/{pid}/comm"
-            if os.path.exists(comm_path):
-                with open(comm_path) as f:
-                    comm = f.read().strip()
-                if comm in ("claude", "node"):
+            # Portable: ps -o comm= -p PID (works on Linux + macOS)
+            try:
+                result = subprocess.run(
+                    ["ps", "-o", "comm=", "-p", str(pid)],
+                    capture_output=True, text=True, timeout=2,
+                )
+                comm = result.stdout.strip().split("/")[-1]  # basename
+                if comm in ("claude", "claude-code", "node"):
                     return pid
-            stat_path = f"/proc/{pid}/stat"
-            if os.path.exists(stat_path):
-                with open(stat_path) as f:
-                    # PPID is field 4 (after comm which may contain spaces)
-                    ppid = int(f.read().split(")")[1].split()[1])
-                pid = ppid
-            else:
-                break
+                # Get parent PID
+                ppid_result = subprocess.run(
+                    ["ps", "-o", "ppid=", "-p", str(pid)],
+                    capture_output=True, text=True, timeout=2,
+                )
+                pid = int(ppid_result.stdout.strip())
+            except (subprocess.TimeoutExpired, ValueError, FileNotFoundError):
+                # Fallback: /proc (Linux only)
+                comm_path = f"/proc/{pid}/comm"
+                if os.path.exists(comm_path):
+                    with open(comm_path) as f:
+                        comm = f.read().strip()
+                    if comm in ("claude", "claude-code", "node"):
+                        return pid
+                stat_path = f"/proc/{pid}/stat"
+                if os.path.exists(stat_path):
+                    with open(stat_path) as f:
+                        ppid = int(f.read().split(")")[1].split()[1])
+                    pid = ppid
+                else:
+                    break
     except (OSError, IndexError, ValueError):
         pass
     return None
@@ -1727,14 +1751,20 @@ def mcp_serve():
 
         method = msg.get("method", "")
         msg_id = msg.get("id")
-        params = msg.get("params", {})
+        params = msg.get("params") or {}
+        if not isinstance(params, dict):
+            if msg_id is not None:
+                resp = {"jsonrpc": "2.0", "id": msg_id,
+                        "error": {"code": -32602, "message": "params must be an object"}}
+                print(json.dumps(resp), flush=True)
+            continue
 
         result = None
         if method == "initialize":
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.2.2"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.3"},
             }
         elif method == "notifications/initialized":
             continue
