@@ -4,7 +4,7 @@
 [![license](https://img.shields.io/npm/l/session-recall)](https://github.com/buildingopen/session-recall/blob/main/LICENSE)
 [![npm downloads](https://img.shields.io/npm/dm/session-recall)](https://www.npmjs.com/package/session-recall)
 
-Claude Code forgets everything after context compaction. This gets it back.
+Total recall for Claude Code. Get back everything compaction took.
 
 ```bash
 npx session-recall "the thing you lost"
