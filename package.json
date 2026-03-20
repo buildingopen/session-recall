@@ -1,0 +1,29 @@
+{
+  "name": "session-recall",
+  "version": "1.0.0",
+  "description": "Search and analyze Claude Code session transcripts to recover context after compaction",
+  "bin": {
+    "session-recall": "bin/session-recall.js"
+  },
+  "scripts": {
+    "test": "python3 test_session_recall.py"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "session",
+    "transcript",
+    "context",
+    "recovery",
+    "analysis"
+  ],
+  "author": "Building Open",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/buildingopen/session-recall.git"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
