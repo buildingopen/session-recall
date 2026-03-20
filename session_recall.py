@@ -1734,7 +1734,7 @@ def mcp_serve():
             result = {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "session-recall", "version": "1.2.0"},
+                "serverInfo": {"name": "session-recall", "version": "1.2.1"},
             }
         elif method == "notifications/initialized":
             continue
