@@ -12,7 +12,9 @@ npx session-recall "the thing you lost"
 
 ## The problem
 
-When Claude Code compacts context, you get a vague summary. Details vanish: decisions, error solutions, specific commands that worked, corrections you gave. You're left grepping through JSON soup in `~/.claude/projects/`.
+When Claude Code compacts context, you get a vague summary. Details vanish: decisions, error solutions, specific commands that worked, corrections you gave.
+
+But the raw transcripts are never deleted. Every session is saved as JSONL in `~/.claude/projects/`, permanently. Compaction only affects the live context window. The data is always there, just buried in JSON soup.
 
 session-recall parses those JSONL transcripts properly. It extracts human-readable messages, tool calls, errors, and patterns, so you find what you need in seconds.
 
