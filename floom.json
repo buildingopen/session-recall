@@ -1,0 +1,111 @@
+{
+  "name": "Session Recall",
+  "description": "Search and analyze Claude Code session transcripts to recover context after compaction.",
+  "manifest_version": "2.0",
+  "runtime": "python",
+  "python_dependencies": [],
+  "secrets_needed": [],
+  "actions": {
+    "search": {
+      "label": "Search",
+      "description": "Keyword search across a Claude Code session transcript (AND logic).",
+      "inputs": [
+        {
+          "name": "jsonl_session",
+          "label": "Session JSONL",
+          "type": "textarea",
+          "required": true,
+          "description": "Paste the full contents of a ~/.claude/projects/.../<session>.jsonl file."
+        },
+        {
+          "name": "keywords",
+          "label": "Keywords",
+          "type": "text",
+          "required": true,
+          "description": "Space or comma separated keywords."
+        },
+        {
+          "name": "max_results",
+          "label": "Max Results",
+          "type": "number",
+          "required": false,
+          "default": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "matches",
+          "label": "Matches",
+          "type": "text"
+        }
+      ]
+    },
+    "recent": {
+      "label": "Recent Messages",
+      "description": "Return the last N human/assistant messages, skipping tool noise.",
+      "inputs": [
+        {
+          "name": "jsonl_session",
+          "label": "Session JSONL",
+          "type": "textarea",
+          "required": true,
+          "description": "Paste a session .jsonl file."
+        },
+        {
+          "name": "count",
+          "label": "Count",
+          "type": "number",
+          "required": false,
+          "default": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "messages",
+          "label": "Messages",
+          "type": "text"
+        }
+      ]
+    },
+    "report": {
+      "label": "Session Report",
+      "description": "Analyze retry loops, errors, corrections, and inflated self-scores. Suggests CLAUDE.md rules and MEMORY.md entries.",
+      "inputs": [
+        {
+          "name": "jsonl_session",
+          "label": "Session JSONL",
+          "type": "textarea",
+          "required": true,
+          "description": "Paste a session .jsonl file."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "stats",
+          "label": "Stats",
+          "type": "json"
+        },
+        {
+          "name": "retry_loops",
+          "label": "Retry Loops",
+          "type": "json"
+        },
+        {
+          "name": "error_categories",
+          "label": "Error Categories",
+          "type": "json"
+        },
+        {
+          "name": "suggested_rules",
+          "label": "Suggested CLAUDE.md Rules",
+          "type": "json"
+        },
+        {
+          "name": "suggested_memories",
+          "label": "Suggested MEMORY.md Entries",
+          "type": "json"
+        }
+      ]
+    }
+  }
+}
